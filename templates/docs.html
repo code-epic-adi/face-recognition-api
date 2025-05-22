@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Documentation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        code {
+            background-color: #f4f4f4;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        pre {
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>API Documentation</h1>
+    <h2>Compare Faces API</h2>
+    <p><strong>Endpoint:</strong> /api/compare_faces</p>
+    <p><strong>Method:</strong> POST</p>
+    <p><strong>Request Format:</strong></p>
+    <pre>
+{
+    "submitted_image": "base64_encoded_image",
+    "reference_image": "base64_encoded_image"
+}
+    </pre>
+    <p><strong>Response Format:</strong></p>
+    <pre>
+{
+    "is_match": true,
+    "similarity_score": 0.85,
+    "error": null
+}
+    </pre>
+
+    <h3>Example Usage (Android - Kotlin)</h3>
+    <pre>
+// Convert bitmap to base64
+fun bitmapToBase64(bitmap: Bitmap): String {
+    val byteArrayOutputStream = ByteArrayOutputStream()
+    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, byteArrayOutputStream)
+    val byteArray = byteArrayOutputStream.toByteArray()
+    return Base64.encodeToString(byteArray, Base64.DEFAULT)
+}
+
+// Make API request
+fun compareFaces(
+    submittedImage: Bitmap,
+    referenceImage: Bitmap,
+    callback: (isMatch: Boolean, similarityScore: Float?, error: String?) -> Unit
+) {
+    // Convert images to base64
+    val submittedImageBase64 = bitmapToBase64(submittedImage)
+    val referenceImageBase64 = bitmapToBase64(referenceImage)
+    
+    // Prepare JSON payload
+    val jsonBody = JSONObject().apply {
+        put("submitted_image", submittedImageBase64)
+        put("reference_image", referenceImageBase64)
+    }
+    
+    // Create request body
+    val mediaType = MediaType.parse("application/json; charset=utf-8")
+    val requestBody = RequestBody.create(mediaType, jsonBody.toString())
+    
+    // Build request
+    val request = Request.Builder()
+        .url("https://your-render-app.onrender.com/api/compare_faces")
+        .post(requestBody)
+        .build()
+    
+    // Execute request asynchronously
+    OkHttpClient().newCall(request).enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            // Handle network errors
+            callback(false, null, e.message ?: "Network error")
+        }
+        
+        override fun onResponse(call: Call, response: Response) {
+            try {
+                // Parse response
+                val responseBody = response.body()?.string()
+                if (responseBody != null) {
+                    val jsonResponse = JSONObject(responseBody)
+                    
+                    val isMatch = jsonResponse.getBoolean("is_match")
+                    val similarityScore = jsonResponse.getDouble("similarity_score").toFloat()
+                    val error = if (jsonResponse.isNull("error")) null else jsonResponse.getString("error")
+                    
+                    // Call the callback with the result
+                    callback(isMatch, similarityScore, error)
+                } else {
+                    callback(false, null, "Empty response")
+                }
+            } catch (e: Exception) {
+                callback(false, null, "Error parsing response: ${e.message}")
+            }
+        }
+    })
+}
+    </pre>
+</body>
+</html>
