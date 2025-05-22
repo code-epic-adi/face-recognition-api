@@ -1,168 +1,130 @@
-import streamlit as st
+import os
 import base64
-import io
-import numpy as np
-from PIL import Image
 import json
 from io import BytesIO
-from skimage import feature, transform, color
+from PIL import Image
+import numpy as np
+import face_recognition
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 
-st.set_page_config(page_title="Face Recognition API", layout="wide")
-st.title("Face Recognition API")
+app = Flask(__name__)
+CORS(app)
 
-# Function to detect faces using HOG from scikit-image
-def detect_faces_hog(image):
-    # Convert to grayscale
-    img_gray = np.array(image.convert('L'))
-    
-    # Resize for faster processing
-    img_resized = transform.resize(img_gray, (256, 256), preserve_range=True).astype(np.uint8)
-    
-    # Extract HOG features
-    hog_features = feature.hog(
-        img_resized, 
-        orientations=8, 
-        pixels_per_cell=(16, 16),
-        cells_per_block=(1, 1), 
-        visualize=False
-    )
-    
-    # Check if there's enough feature information (very naive approach)
-    feature_score = np.sum(hog_features > 0.1)
-    has_face = feature_score > 100
-    
-    return has_face
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-# Function to compare images using HOG features
-def compare_faces_hog(img1, img2):
-    # Resize images to same dimensions
-    img1 = img1.resize((128, 128))
-    img2 = img2.resize((128, 128))
-    
-    # Convert to grayscale
-    img1_gray = np.array(img1.convert('L'))
-    img2_gray = np.array(img2.convert('L'))
-    
-    # Extract HOG features
-    hog1 = feature.hog(
-        img1_gray, 
-        orientations=8, 
-        pixels_per_cell=(16, 16),
-        cells_per_block=(1, 1), 
-        visualize=False
-    )
-    
-    hog2 = feature.hog(
-        img2_gray, 
-        orientations=8, 
-        pixels_per_cell=(16, 16),
-        cells_per_block=(1, 1), 
-        visualize=False
-    )
-    
-    # Calculate cosine similarity
-    dot_product = np.dot(hog1, hog2)
-    norm1 = np.linalg.norm(hog1)
-    norm2 = np.linalg.norm(hog2)
-    
-    if norm1 == 0 or norm2 == 0:
-        similarity = 0
-    else:
-        similarity = dot_product / (norm1 * norm2)
-    
-    # Determine if it's a match
-    threshold = 0.8
-    is_match = similarity >= threshold
-    
-    return is_match, similarity
+@app.route('/docs')
+def docs():
+    return render_template('docs.html')
 
-# API endpoints
-tab1, tab2 = st.tabs(["Web Interface", "API Documentation"])
+@app.route('/api/compare_faces', methods=['POST'])
+def compare_faces():
+    try:
+        # Get request data
+        data = request.json
+        
+        if not data or 'submitted_image' not in data or 'reference_image' not in data:
+            return jsonify({
+                "is_match": False,
+                "similarity_score": 0.0,
+                "error": "Both submitted_image and reference_image are required"
+            })
+        
+        # Decode base64 images
+        try:
+            submitted_image_data = data['submitted_image']
+            reference_image_data = data['reference_image']
+            
+            # Handle data URLs (remove prefix if present)
+            if ',' in submitted_image_data:
+                submitted_image_data = submitted_image_data.split(',', 1)[1]
+            if ',' in reference_image_data:
+                reference_image_data = reference_image_data.split(',', 1)[1]
+            
+            submitted_image_bytes = base64.b64decode(submitted_image_data)
+            reference_image_bytes = base64.b64decode(reference_image_data)
+        except Exception as e:
+            return jsonify({
+                "is_match": False,
+                "similarity_score": 0.0,
+                "error": f"Invalid image format: {str(e)}"
+            })
+        
+        # Load images
+        try:
+            submitted_pil = Image.open(BytesIO(submitted_image_bytes))
+            reference_pil = Image.open(BytesIO(reference_image_bytes))
+            
+            # Convert to RGB if needed
+            if submitted_pil.mode != 'RGB':
+                submitted_pil = submitted_pil.convert('RGB')
+            if reference_pil.mode != 'RGB':
+                reference_pil = reference_pil.convert('RGB')
+            
+            # Convert to numpy arrays
+            submitted_image = np.array(submitted_pil)
+            reference_image = np.array(reference_pil)
+        except Exception as e:
+            return jsonify({
+                "is_match": False,
+                "similarity_score": 0.0,
+                "error": f"Invalid image data: {str(e)}"
+            })
+        
+        # Detect faces
+        submitted_face_locations = face_recognition.face_locations(submitted_image)
+        reference_face_locations = face_recognition.face_locations(reference_image)
+        
+        # Check if faces were detected
+        if not submitted_face_locations:
+            return jsonify({
+                "is_match": False,
+                "similarity_score": 0.0,
+                "error": "No face detected in submitted image"
+            })
+        
+        if not reference_face_locations:
+            return jsonify({
+                "is_match": False,
+                "similarity_score": 0.0,
+                "error": "No face detected in reference image"
+            })
+        
+        # Get face encodings
+        submitted_face_encoding = face_recognition.face_encodings(submitted_image, submitted_face_locations)[0]
+        reference_face_encoding = face_recognition.face_encodings(reference_image, reference_face_locations)[0]
+        
+        # Compare faces
+        # Calculate face distance (lower means more similar)
+        face_distance = face_recognition.face_distance([reference_face_encoding], submitted_face_encoding)[0]
+        
+        # Convert distance to similarity score (0 to 1, higher is more similar)
+        similarity_score = 1.0 - min(face_distance, 1.0)
+        
+        # Determine if it's a match (threshold can be adjusted)
+        threshold = 0.6
+        is_match = similarity_score >= threshold
+        
+        return jsonify({
+            "is_match": bool(is_match),
+            "similarity_score": float(similarity_score),
+            "error": None
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "is_match": False,
+            "similarity_score": 0.0,
+            "error": str(e)
+        })
 
-with tab1:
-    # Upload reference image
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Reference Image")
-        ref_image_file = st.file_uploader("Upload reference image", type=["jpg", "jpeg", "png"], key="ref")
-        if ref_image_file:
-            ref_image = Image.open(ref_image_file)
-            st.image(ref_image, caption="Reference Image", use_column_width=True)
-    
-    with col2:
-        st.subheader("Test Image")
-        test_image_file = st.file_uploader("Upload test image", type=["jpg", "jpeg", "png"], key="test")
-        if test_image_file:
-            test_image = Image.open(test_image_file)
-            st.image(test_image, caption="Test Image", use_column_width=True)
-    
-    # Process images
-    if ref_image_file and test_image_file:
-        if st.button("Compare Faces"):
-            with st.spinner("Processing..."):
-                # Convert to PIL Images
-                ref_image = Image.open(ref_image_file)
-                test_image = Image.open(test_image_file)
-                
-                # Detect faces
-                ref_has_face = detect_faces_hog(ref_image)
-                test_has_face = detect_faces_hog(test_image)
-                
-                if not ref_has_face:
-                    st.error("No face detected in reference image")
-                elif not test_has_face:
-                    st.error("No face detected in test image")
-                else:
-                    # Compare faces
-                    is_match, similarity = compare_faces_hog(ref_image, test_image)
-                    
-                    # Display results
-                    result_color = "green" if is_match else "red"
-                    st.markdown(f"<h2 style='text-align: center; color: {result_color};'>{'MATCH' if is_match else 'NO MATCH'}</h2>", unsafe_allow_html=True)
-                    st.markdown(f"<h3 style='text-align: center;'>Similarity: {similarity:.2f}</h3>", unsafe_allow_html=True)
-                    
-                    st.warning("Note: This is using HOG features for face comparison and may not be as accurate as specialized face recognition systems")
+# Simple test endpoint
+@app.route('/test')
+def test():
+    return jsonify({"status": "API is working!"})
 
-with tab2:
-    st.header("API Documentation")
-    
-    st.subheader("Compare Faces API")
-    st.markdown("""
-    **Endpoint:** `/api/compare_faces`
-    
-    **Method:** POST
-    
-    **Request Format:**
-    ```json
-    {
-        "submitted_image": "base64_encoded_image",
-        "reference_image": "base64_encoded_image"
-    }
-    ```
-    
-    **Response Format:**
-    ```json
-    {
-        "is_match": true,
-        "similarity_score": 0.85,
-        "error": null
-    }
-    ```
-    
-    **Example Usage:**
-    ```kotlin
-    // Android Kotlin Example
-    val apiUrl = "https://huggingface.co/spaces/yourusername/face-recognition-api/api/compare_faces"
-    val jsonBody = JSONObject().apply {
-        put("submitted_image", submittedImageBase64)
-        put("reference_image", referenceImageBase64)
-    }
-    
-    // Make API call using your preferred HTTP client
-    ```
-    """)
-
-# Add a footer with disclaimer
-st.markdown("---")
-st.caption("Disclaimer: This is a simplified face comparison tool using HOG features and not a production-ready face recognition system.")
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port)
